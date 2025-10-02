@@ -1,0 +1,351 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>서울 따릉이 지도 + AI 채팅</title>
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+
+  <!-- MarkerCluster -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+
+  <!-- Markdown + Sanitizer -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+
+  <!-- Google Generative AI (ESM in browser) -->
+  <script type="module" id="genai-loader">
+    // 빈 모듈: 본문에서 다시 import합니다(일부 CSP 우회용).
+  </script>
+
+  <style>
+    :root{
+      --green-50:#f0fdf4; --green-100:#dcfce7; --green-200:#bbf7d0; --green-300:#86efac;
+      --green-400:#4ade80; --green-500:#22c55e; --green-600:#16a34a; --green-700:#15803d;
+      --ink:#0b1b13; --muted:#54735f; --border:#e5f7ea; --shadow:0 6px 28px rgba(21,128,61,.10);
+      --bg:white;
+    }
+    *{box-sizing:border-box}
+    html,body{height:100%;margin:0;background:var(--green-50);color:var(--ink);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,Pretendard,sans-serif}
+    .app{display:flex;height:100%;gap:14px;padding:14px}
+    .panel{background:var(--bg);border:1px solid var(--green-200);border-radius:16px;box-shadow:var(--shadow)}
+    /* 좌: 지도 */
+    #map-wrap{flex:1;position:relative;min-width:320px}
+    #map{position:absolute;inset:0;border-radius:16px}
+    .map-title,.map-controls{
+      position:absolute;z-index:1000;background:rgba(240,253,244,.95);border:1px solid var(--green-200);
+      border-radius:12px;padding:8px 10px;box-shadow:0 2px 10px rgba(21,128,61,.08);color:var(--ink)
+    }
+    .map-title{left:12px;top:12px;font-weight:800}
+    .map-controls{right:12px;top:12px;display:flex;gap:8px;align-items:center}
+    .btn{border:1px solid var(--green-200);border-radius:10px;padding:7px 10px;background:#fff;cursor:pointer;user-select:none}
+    .btn:hover{background:var(--green-100)}
+    .btn.active{border-color:var(--green-500);box-shadow:0 0 0 2px var(--green-100) inset;font-weight:800}
+
+    /* 아이콘 */
+    .bike-pin{
+      width:28px;height:28px;border-radius:50%;background:var(--green-500);color:#fff;display:flex;align-items:center;justify-content:center;
+      font-size:16px;line-height:1;box-shadow:0 2px 8px rgba(21,128,61,.30);transform:translate(-14px,-14px);border:2px solid #fff
+    }
+    .marker-cluster-small,.marker-cluster-medium,.marker-cluster-large{background:var(--green-400);color:#0b1b13;border:2px solid #fff}
+    .marker-cluster div{
+      background:var(--green-500);color:#fff;border-radius:50%;border:2px solid #fff;font:800 12px/26px system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+      width:28px;height:28px;box-shadow:0 2px 8px rgba(21,128,61,.25);
+    }
+    .leaflet-popup-content{margin:8px 10px}
+    .leaflet-popup-content b{font-size:14px}
+    .leaflet-popup-content small{color:#2b4739}
+
+    /* 우: 채팅 */
+    #chat{width:420px;min-width:320px;display:flex;flex-direction:column}
+    .chat-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--border)}
+    .chat-title{font-weight:800}
+    .chat-actions{display:flex;gap:8px}
+    .pill{border:1px solid var(--green-200);background:#fff;border-radius:999px;padding:6px 10px;cursor:pointer}
+    .pill:hover{background:var(--green-100)}
+    .settings{padding:12px 14px;border-bottom:1px solid var(--border);display:none;gap:8px;flex-wrap:wrap}
+    .settings.open{display:flex}
+    .settings input{flex:1 1 100%;padding:10px;border:1px solid var(--green-200);border-radius:10px}
+    .settings small{color:var(--muted)}
+    .chat-body{flex:1;overflow:auto;padding:14px;scroll-behavior:smooth}
+    .msg{display:flex;gap:10px;margin-bottom:14px}
+    .msg .avatar{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;background:var(--green-500);color:white;font-size:14px}
+    .msg.user .avatar{background:#111}
+    .bubble{max-width:85%;padding:10px 12px;border:1px solid var(--green-200);border-radius:12px;background:#fff}
+    .msg.user .bubble{background:#111;color:#fff;border-color:#111}
+    .msg.assistant .bubble{background:#fff}
+    .bubble .md{overflow:auto}
+    .typing{display:inline-block;min-width:56px}
+    .dots:after{content:"";display:inline-block;width:1.2em;animation:blink 1s steps(4,end) infinite}
+    @keyframes blink {0%{content:"."}25%{content:".."}50%{content:"..."}75%{content:"...."}100%{content:"."}}
+    .chat-input{border-top:1px solid var(--border);padding:10px;display:flex;gap:8px}
+    textarea{flex:1;resize:none;min-height:44px;max-height:160px;padding:10px;border:1px solid var(--green-200);border-radius:12px}
+    .send{min-width:44px;border-radius:12px;border:1px solid var(--green-200);background:var(--green-500);color:white;font-weight:700;cursor:pointer}
+    .send:disabled{opacity:.6;cursor:not-allowed}
+
+    /* 반응형: 좁은 화면에서는 상하 배치 */
+    @media (max-width: 980px){
+      .app{flex-direction:column}
+      #chat{width:100%;min-height:45vh}
+      #map-wrap{height:55vh}
+    }
+
+    @media (prefers-color-scheme: dark){
+      html,body{background:#0a1510;color:#e8f6ed}
+      .panel{background:#0f2419;border-color:#163d2a}
+      .map-title,.map-controls{background:rgba(12,28,20,.9);border-color:#163d2a;color:#e8f6ed}
+      .btn,.pill{background:#0f2419;border-color:#163d2a;color:#e8f6ed}
+      .btn:hover,.pill:hover{background:#0b1b13}
+      textarea,.settings input{background:#0f2419;color:#e8f6ed;border-color:#163d2a}
+      .bubble{background:#0f2419;color:#e8f6ed;border-color:#163d2a}
+      .msg.user .bubble{background:#111;color:#fff;border-color:#222}
+      .avatar{border:1px solid #163d2a}
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <!-- Left: Map -->
+    <section id="map-wrap" class="panel">
+      <div id="map"></div>
+      <div class="map-title">서울 따릉이 대여소 지도</div>
+      <div class="map-controls">
+        보기:
+        <button id="btn-cluster" class="btn active">마커 합치기</button>
+        <button id="btn-plain" class="btn">그대로 보기</button>
+        <button id="btn-recenter" class="btn" title="대여소 범위로 다시 맞추기">초기화</button>
+      </div>
+    </section>
+
+    <!-- Right: Chat -->
+    <aside id="chat" class="panel">
+      <div class="chat-head">
+        <div class="chat-title">인공지능 챗봇</div>
+        <div class="chat-actions">
+          <button id="toggle-settings" class="pill">API 설정</button>
+          <button id="clear-chat" class="pill" title="대화 내용 삭제">초기화</button>
+        </div>
+      </div>
+      <div class="settings" id="settings">
+        <input id="apiKey" type="password" placeholder="여기에 Google Generative AI API 키를 붙여넣고 저장하세요" />
+        <div style="display:flex;gap:8px;align-items:center;width:100%">
+          <button id="saveKey" class="pill">키 저장</button>
+          <small>모델: <b>models/gemini-2.5-pro</b> (고정, 브라우저에서 직접 호출)</small>
+        </div>
+      </div>
+      <div id="chat-body" class="chat-body" aria-live="polite"></div>
+      <div class="chat-input">
+        <textarea id="prompt" placeholder="따릉이, 나들이 코스, 환승·자전거 길 등 궁금한 점을 입력하세요. (Enter=전송, Shift+Enter=줄바꿈)"></textarea>
+        <button id="send" class="send">보내기</button>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    /* =======================
+       1) 지도 초기화
+       ======================= */
+    const map = L.map('map', { center: [37.5665, 126.9780], zoom: 12, scrollWheelZoom: true });
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19, attribution: '&copy; OpenStreetMap &copy; CARTO'
+    }).addTo(map);
+
+    const clusterLayer = L.markerClusterGroup({ showCoverageOnHover: false, spiderfyOnMaxZoom: true });
+    const plainLayer   = L.layerGroup();
+    const bikeIcon = L.divIcon({ className: 'bike-pin', html: '🚲', iconSize: [28,28], iconAnchor:[14,14], popupAnchor:[0,-12] });
+
+    let _bounds = [];
+    fetch('stations.json', { cache: 'no-store' })
+      .then(r => { if(!r.ok) throw new Error('stations.json을 불러오지 못했습니다.'); return r.json(); })
+      .then(stores => {
+        _bounds = [];
+        stores.forEach(s=>{
+          if (!Number.isFinite(s.lat) || !Number.isFinite(s.lng)) return;
+          const popup = `
+            <div>
+              <b>${esc(s.name ?? '')}</b><br/>
+              <small>${esc(s.district ?? '')}</small><br/>
+              <small>${esc(s.address ?? '')}</small><br/>
+              <small>거치대수: ${s.capacity ?? '-'}</small><br/>
+              ${s.installed_at ? `<small>설치: ${esc(s.installed_at)}</small><br/>` : ''}
+              <a href="https://www.google.com/maps?q=${s.lat},${s.lng}" target="_blank" rel="noopener">구글지도 열기</a>
+            </div>`;
+          const m1 = L.marker([s.lat, s.lng], { icon: bikeIcon }).bindPopup(popup);
+          const m2 = L.marker([s.lat, s.lng], { icon: bikeIcon }).bindPopup(popup);
+          clusterLayer.addLayer(m1);
+          plainLayer.addLayer(m2);
+          _bounds.push([s.lat, s.lng]);
+        });
+        map.addLayer(clusterLayer);
+        if (_bounds.length) map.fitBounds(_bounds, { padding:[24,24] });
+      })
+      .catch(err => { console.error(err); alert('데이터 로딩 오류: '+err.message); });
+
+    function esc(str){ return String(str).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+    // 토글/초기화
+    const btnCluster = document.getElementById('btn-cluster');
+    const btnPlain   = document.getElementById('btn-plain');
+    const btnRecenter= document.getElementById('btn-recenter');
+
+    btnCluster.addEventListener('click', ()=>{
+      if (map.hasLayer(clusterLayer)) return;
+      map.removeLayer(plainLayer); map.addLayer(clusterLayer);
+      btnCluster.classList.add('active'); btnPlain.classList.remove('active');
+    });
+    btnPlain.addEventListener('click', ()=>{
+      if (map.hasLayer(plainLayer)) return;
+      map.removeLayer(clusterLayer); map.addLayer(plainLayer);
+      btnPlain.classList.add('active'); btnCluster.classList.remove('active');
+    });
+    btnRecenter.addEventListener('click', ()=>{
+      if (_bounds.length) map.fitBounds(_bounds, { padding:[24,24] });
+    });
+
+    /* =======================
+       2) 채팅 UI
+       ======================= */
+    const chatBody = document.getElementById('chat-body');
+    const promptEl = document.getElementById('prompt');
+    const sendBtn  = document.getElementById('send');
+    const toggleSettings = document.getElementById('toggle-settings');
+    const settings  = document.getElementById('settings');
+    const apiKeyEl  = document.getElementById('apiKey');
+    const saveKey   = document.getElementById('saveKey');
+    const clearBtn  = document.getElementById('clear-chat');
+
+    // 로컬스토리지에서 키 로드
+    const KEY_NAME = 'gemini_api_key';
+    apiKeyEl.value = localStorage.getItem(KEY_NAME) || '';
+
+    toggleSettings.addEventListener('click', ()=> settings.classList.toggle('open'));
+    saveKey.addEventListener('click', ()=>{
+      localStorage.setItem(KEY_NAME, apiKeyEl.value.trim());
+      alert('API 키를 저장했습니다.');
+      settings.classList.remove('open');
+    });
+
+    clearBtn.addEventListener('click', ()=>{
+      if (confirm('대화 내용을 모두 지울까요?')) {
+        chatBody.innerHTML = '';
+        historyMsgs.length = 0;
+      }
+    });
+
+    // Enter = 전송, Shift+Enter = 줄바꿈
+    promptEl.addEventListener('keydown', (e)=>{
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault(); send();
+      }
+    });
+    sendBtn.addEventListener('click', send);
+
+    // 히스토리(간단): [{role:'user'|'model', parts:[{text}]}]
+    const historyMsgs = [];
+
+    function addMsg(role, html){
+      const wrap = document.createElement('div');
+      wrap.className = `msg ${role}`;
+      const avatar = document.createElement('div');
+      avatar.className = 'avatar';
+      avatar.textContent = role==='user' ? '🙋' : '🤖';
+      const bubble = document.createElement('div');
+      bubble.className = 'bubble';
+      const md = document.createElement('div');
+      md.className = 'md';
+      md.innerHTML = html;
+      bubble.appendChild(md);
+      wrap.appendChild(avatar);
+      wrap.appendChild(bubble);
+      chatBody.appendChild(wrap);
+      chatBody.scrollTop = chatBody.scrollHeight;
+      return wrap;
+    }
+
+    function addTyping(){
+      const wrap = document.createElement('div');
+      wrap.className = 'msg assistant';
+      wrap.innerHTML = `
+        <div class="avatar">🤖</div>
+        <div class="bubble"><span class="typing"><span class="dots"></span></span> 입력중</div>
+      `;
+      chatBody.appendChild(wrap);
+      chatBody.scrollTop = chatBody.scrollHeight;
+      return wrap;
+    }
+
+    function mdToHtml(text){
+      const raw = marked.parse(text, { breaks:true });
+      return DOMPurify.sanitize(raw);
+    }
+
+    async function send(){
+      const text = promptEl.value.trim();
+      if (!text) return;
+      const apiKey = (apiKeyEl.value || localStorage.getItem(KEY_NAME) || '').trim();
+      if (!apiKey){ alert('API 키를 입력 후 저장하세요.'); settings.classList.add('open'); return; }
+
+      // 사용자 메시지 출력
+      addMsg('user', mdToHtml(text));
+      promptEl.value = '';
+      promptEl.style.height = '44px';
+
+      // 타이핑 표시
+      const typingEl = addTyping();
+      sendBtn.disabled = true;
+
+      try{
+        // 동적 import (브라우저 ESM)
+        const { GoogleGenerativeAI } = await import('https://esm.run/@google/generative-ai');
+
+        // 모델 준비 (고정 모델명)
+        const genAI = new GoogleGenerativeAI(apiKey);
+        const model = genAI.getGenerativeModel({
+          model: 'models/gemini-2.5-pro',
+          // 도메인 지시: 따릉이/나들이 특화 + 간결·정확
+          systemInstruction: `
+당신은 서울 '따릉이' 대여소·자전거 길·나들이 코스를 도와주는 한국어 비서입니다.
+규칙:
+1) 추측 금지. 불확실하면 "확실하지 않음"이라 말하고 대안을 제시.
+2) 요점 위주, 간결하고 공적인 톤. 과장 금지.
+3) 안전 수칙·대중교통 환승·자전거 도로/공원·주말 코스 등 실용 팁을 먼저.
+4) 마크다운으로 리스트/링크/소제목을 정리.
+5) 법/요금/운영 정보는 변동 가능성을 함께 고지.
+          `.trim()
+        });
+
+        // 대화 시작(간단 히스토리 전달)
+        const chat = model.startChat({ history: historyMsgs });
+
+        const result = await chat.sendMessage(text);
+        const reply = (await result.response.text()) || '';
+
+        // 히스토리 갱신
+        historyMsgs.push({ role: 'user',  parts:[{text}] });
+        historyMsgs.push({ role: 'model', parts:[{text: reply}] });
+
+        // 타이핑 제거 후 답변 출력
+        typingEl.remove();
+        addMsg('assistant', mdToHtml(reply));
+      }catch(err){
+        console.error(err);
+        typingEl.remove();
+        addMsg('assistant', mdToHtml(`**오류**: 요청을 처리하지 못했습니다.\n\n- ${String(err.message || err)}`));
+      }finally{
+        sendBtn.disabled = false;
+      }
+    }
+
+    // 자동 높이
+    promptEl.addEventListener('input', ()=>{
+      promptEl.style.height = 'auto';
+      promptEl.style.height = Math.min(promptEl.scrollHeight, 160) + 'px';
+    });
+  </script>
+</body>
+</html>
